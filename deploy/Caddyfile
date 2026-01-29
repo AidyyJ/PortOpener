@@ -1,0 +1,26 @@
+{
+  auto_https off
+}
+
+admin.tunnel.lvh.me {
+  reverse_proxy server:8080
+}
+
+*.tunnel.lvh.me {
+  reverse_proxy server:8080
+}
+
+{
+  admin off
+}
+
+tls {
+  on_demand {
+    ask http://server:8080/api/tls/ask
+  }
+}
+
+https:// {
+  reverse_proxy server:8080
+}
+

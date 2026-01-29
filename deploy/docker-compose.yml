@@ -1,0 +1,32 @@
+name: portopener-dev
+
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    environment:
+      PORTOPENER_HTTP_ADDR: ":8080"
+      PORTOPENER_WEB_ROOT: "/app/web"
+      PORTOPENER_ADMIN_TOKEN: "dev-admin-token"
+      PORTOPENER_ADMIN_ALLOWLIST: "127.0.0.1/32"
+      PORTOPENER_RELAY_TOKEN: "dev-relay-token"
+    ports:
+      - "8080:8080"
+
+  caddy:
+    image: caddy:2
+    depends_on:
+      - server
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:
+
