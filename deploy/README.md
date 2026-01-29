@@ -10,6 +10,7 @@ This directory contains Docker Compose and Caddy configuration files for deployi
 |------|---------|
 | [`docker-compose.yml`](docker-compose.yml) | Docker Compose service definitions for server and Caddy |
 | [`Caddyfile`](Caddyfile) | Caddy reverse proxy configuration with on-demand TLS |
+| [`caddy.Dockerfile`](caddy.Dockerfile) | Custom Caddy build with Cloudflare DNS-01 module |
 
 ## Quick Start
 
@@ -22,9 +23,10 @@ This directory contains Docker Compose and Caddy configuration files for deployi
 
    See [`.env.example`](.env.example) for all required variables and their descriptions.
 
-2. **Update Caddyfile**:
-   - Replace `example.com` with your actual domain
-   - Ensure `CLOUDFLARE_API_TOKEN` is set in `.env`
+2. **Build images** (server + custom Caddy):
+   ```bash
+   sudo docker compose build
+   ```
 
 3. **Start services**:
    ```bash
@@ -67,7 +69,7 @@ sudo docker run --rm -v portopener_portopener_data:/data -v $(pwd):/backup alpin
 ## Security Notes
 
 - Never commit `.env` to version control
-- Use strong, randomly generated tokens
+- Use a single shared token (`PORTOPENER_RELAY_TOKEN`) for admin API + relay
 - Restrict `PORTOPENER_ADMIN_ALLOWLIST` to trusted IPs
 - Keep Cloudflare API token secure
 - Use "DNS only" (gray cloud) for Cloudflare DNS records

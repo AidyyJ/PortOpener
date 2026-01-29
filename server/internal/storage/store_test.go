@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -53,6 +54,67 @@ func TestTokenLifecycle(t *testing.T) {
 	}
 	if !ok {
 		t.Fatalf("expected new token valid")
+	}
+}
+
+func TestUpsertHTTPReservationReplacesAllowlist(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	store, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("open failed: %v", err)
+	}
+	defer store.Close()
+	if err := store.ApplyMigrations(migrationsDir(t)); err != nil {
+		t.Fatalf("migrations failed: %v", err)
+	}
+
+	if err := store.UpsertTunnel(Tunnel{
+		ID:        "tunnel-1",
+		Protocol:  "http",
+		LocalHost: "127.0.0.1",
+		LocalPort: 8080,
+		Status:    "active",
+	}); err != nil {
+		t.Fatalf("insert tunnel failed: %v", err)
+	}
+
+	res := HTTPReservation{TunnelID: "tunnel-1", Subdomain: "app", Allowlist: []string{"10.0.0.0/24"}}
+	if err := store.UpsertHTTPReservation(res); err != nil {
+		t.Fatalf("upsert reservation failed: %v", err)
+	}
+	res.Allowlist = []string{"192.168.1.0/24"}
+	if err := store.UpsertHTTPReservation(res); err != nil {
+		t.Fatalf("upsert reservation update failed: %v", err)
+	}
+
+	rows, err := store.db.Query("SELECT cidr FROM ip_allowlists WHERE tunnel_id = ? ORDER BY cidr ASC", "tunnel-1")
+	if err != nil {
+		t.Fatalf("query allowlists failed: %v", err)
+	}
+	defer rows.Close()
+
+	var cidrs []string
+	for rows.Next() {
+		var cidr string
+		if err := rows.Scan(&cidr); err != nil {
+			t.Fatalf("scan allowlist failed: %v", err)
+		}
+		cidrs = append(cidrs, cidr)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("allowlist rows error: %v", err)
+	}
+	if len(cidrs) != 1 || cidrs[0] != "192.168.1.0/24" {
+		t.Fatalf("expected allowlist replaced, got %v", cidrs)
+	}
+
+	var count int
+	if err := store.db.QueryRow("SELECT COUNT(1) FROM ip_allowlists WHERE tunnel_id = ? AND cidr = ?", "tunnel-1", "10.0.0.0/24").Scan(&count); err != nil && err != sql.ErrNoRows {
+		t.Fatalf("count allowlist failed: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected old allowlist removed, still present")
 	}
 }
 

@@ -49,7 +49,7 @@ func main() {
 		log.Fatalf("token init failed: %v", err)
 	}
 	relaySrv := relayserver.New(relayserver.Config{Token: relayToken}, registry, store)
-	adminAPI := &admin.API{Store: store, Reg: registry}
+	adminAPI := &admin.API{Store: store, Reg: registry, AdminAllowlist: getenv("PORTOPENER_ADMIN_ALLOWLIST", "")}
 	proxy := &relayserver.HTTPProxy{Registry: registry, Metrics: collector, Logs: logger, Store: store}
 
 	mux.HandleFunc("/relay", relaySrv.Handler())

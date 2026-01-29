@@ -199,23 +199,30 @@ func (s *Store) UpsertHTTPReservation(res HTTPReservation) error {
 		return fmt.Errorf("subdomain required")
 	}
 
-	if _, err := s.db.Exec(`INSERT INTO subdomains (subdomain, tunnel_id, reserved, created_at)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`INSERT INTO subdomains (subdomain, tunnel_id, reserved, created_at)
 		VALUES (?, ?, 1, ?)
 		ON CONFLICT(subdomain) DO UPDATE SET tunnel_id = excluded.tunnel_id`, res.Subdomain, res.TunnelID, nowUTC()); err != nil {
 		return err
 	}
 
 	if res.TunnelID != "" {
-		if _, err := s.db.Exec("DELETE FROM ip_allowlists WHERE tunnel_id = ?", res.TunnelID); err != nil {
+		if _, err := tx.Exec("DELETE FROM ip_allowlists WHERE tunnel_id = ?", res.TunnelID); err != nil {
 			return err
 		}
 		for _, cidr := range res.Allowlist {
-			if _, err := s.db.Exec("INSERT INTO ip_allowlists (tunnel_id, cidr, created_at) VALUES (?, ?, ?)", res.TunnelID, cidr, nowUTC()); err != nil {
+			if _, err := tx.Exec("INSERT INTO ip_allowlists (tunnel_id, cidr, created_at) VALUES (?, ?, ?)", res.TunnelID, cidr, nowUTC()); err != nil {
 				return err
 			}
 		}
 	}
-	return nil
+
+	return tx.Commit()
 }
 
 func (s *Store) UpsertTunnel(tunnel Tunnel) error {

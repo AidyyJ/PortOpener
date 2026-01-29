@@ -134,7 +134,9 @@ The admin API and UI are protected by:
 1. **Token authentication** via `Authorization` or `X-Admin-Token` headers (see [`server/internal/admin/http.go`](../server/internal/admin/http.go:33))
 2. **IP allowlist** via `PORTOPENER_ADMIN_ALLOWLIST` environment variable
 
-**Important**: Always set `PORTOPENER_ADMIN_ALLOWLIST` to restrict admin access to trusted IP addresses.
+**Important**: Always set `PORTOPENER_ADMIN_ALLOWLIST` to restrict admin access to trusted IP addresses. If you leave it empty, the admin API will be blocked.
+
+If you run PortOpener behind a reverse proxy that sets `X-Forwarded-For`, the server will use the **first** IP in that header for allowlist checks. Ensure your proxy is trusted and strips untrusted `X-Forwarded-For` headers from the public edge.
 
 ---
 
@@ -217,13 +219,14 @@ PORTOPENER_WEB_ROOT=/app/web
 PORTOPENER_DB_PATH=/data/portopener.db
 PORTOPENER_MIGRATIONS_DIR=/app/migrations
 
-# Admin token (generate a strong random token)
-PORTOPENER_ADMIN_TOKEN=your-super-secret-admin-token-here
+# Admin token (optional). For a single-token setup, leave blank or set to the same value as PORTOPENER_RELAY_TOKEN.
+PORTOPENER_ADMIN_TOKEN=
 
 # Admin IP allowlist (comma-separated CIDR blocks)
 PORTOPENER_ADMIN_ALLOWLIST=your-home-ip/32,another-trusted-ip/32
 
 # Relay token (used by CLI clients)
+# This is the shared token for admin API + relay.
 PORTOPENER_RELAY_TOKEN=your-super-secret-relay-token-here
 
 # Cloudflare API token for DNS-01 challenges
@@ -240,43 +243,43 @@ BASE_DOMAIN=example.com
 - Generate strong, random tokens (minimum 32 characters)
 - Never commit `.env` to version control
 - Restrict `PORTOPENER_ADMIN_ALLOWLIST` to your trusted IPs
-- Use different values for `PORTOPENER_ADMIN_TOKEN` and `PORTOPENER_RELAY_TOKEN`
+- Use `PORTOPENER_RELAY_TOKEN` as the single shared token (leave `PORTOPENER_ADMIN_TOKEN` empty or set it to the same value)
 
 ### Update Caddyfile
 
-Edit [`deploy/Caddyfile`](../deploy/Caddyfile:1) to replace placeholder domains:
+Edit [`deploy/Caddyfile`](../deploy/Caddyfile:1) and ensure environment variables are set:
 
 ```caddyfile
 {
   admin off
-}
-
-# Admin subdomain (replace with your domain)
-admin.tunnel.example.com {
-  reverse_proxy server:8080
-}
-
-# Wildcard tunnel subdomain (replace with your domain)
-*.tunnel.example.com {
-  reverse_proxy server:8080
-}
-
-# TLS configuration with DNS-01
-tls {
-  dns cloudflare {env.CLOUDFLARE_API_TOKEN}
-  resolvers 1.1.1.1
-  on_demand {
+  email {env.ACME_EMAIL}
+  on_demand_tls {
     ask http://server:8080/api/tls/ask
   }
 }
 
-# Catch-all for custom domains
+admin.tunnel.{env.BASE_DOMAIN} {
+  tls {
+    dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+  }
+  reverse_proxy server:8080
+}
+
+*.tunnel.{env.BASE_DOMAIN} {
+  tls {
+    dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+  }
+  reverse_proxy server:8080
+}
+
 https:// {
+  tls {
+    dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+    on_demand
+  }
   reverse_proxy server:8080
 }
 ```
-
-**Important**: Replace `example.com` with your actual domain in all occurrences.
 
 ### Update docker-compose.yml
 
@@ -291,35 +294,33 @@ services:
       context: ..
       dockerfile: server/Dockerfile
     restart: unless-stopped
-    environment:
-      - PORTOPENER_HTTP_ADDR=:8080
-      - PORTOPENER_WEB_ROOT=/app/web
-      - PORTOPENER_DB_PATH=/data/portopener.db
-      - PORTOPENER_MIGRATIONS_DIR=/app/migrations
-      - PORTOPENER_ADMIN_TOKEN=${PORTOPENER_ADMIN_TOKEN}
-      - PORTOPENER_ADMIN_ALLOWLIST=${PORTOPENER_ADMIN_ALLOWLIST}
-      - PORTOPENER_RELAY_TOKEN=${PORTOPENER_RELAY_TOKEN}
+    env_file:
+      - .env
     volumes:
       - portopener_data:/data
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
+      - "20000-40000:20000-40000"
+      - "20000-40000:20000-40000/udp"
 
   caddy:
-    image: caddy:2
+    build:
+      context: .
+      dockerfile: caddy.Dockerfile
     restart: unless-stopped
     depends_on:
       - server
     ports:
       - "80:80"
       - "443:443"
+    env_file:
+      - .env
       - "20000-40000:20000-40000"
       - "20000-40000:20000-40000/udp"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
-    environment:
-      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN}
 
 volumes:
   portopener_data:
@@ -328,10 +329,10 @@ volumes:
 ```
 
 **Key Changes**:
-- Added `restart: unless-stopped` for automatic restarts
-- Added port ranges for TCP/UDP tunnels (20000-40000)
-- Added `CLOUDFLARE_API_TOKEN` environment variable
-- Added `portopener_data` volume for database persistence
+- Uses `.env` for configuration values
+- Adds port ranges for TCP/UDP tunnels (20000-40000)
+- Adds `portopener_data` volume for database persistence
+- Uses a custom Caddy image with the Cloudflare DNS module
 
 ### Build and Start Services
 
@@ -356,7 +357,7 @@ sudo docker compose logs -f
 curl http://localhost:8080/healthz
 
 # Check admin UI (from allowed IP)
-curl -H "Authorization: Bearer your-admin-token" https://admin.tunnel.example.com/api/tunnels
+curl -H "Authorization: Bearer your-token" https://admin.tunnel.example.com/api/tunnels
 ```
 
 ---
@@ -438,22 +439,18 @@ Look for:
 | `PORTOPENER_WEB_ROOT` | Yes | Path to web UI assets | `/app/web` |
 | `PORTOPENER_DB_PATH` | Yes | SQLite database file path | `/data/portopener.db` |
 | `PORTOPENER_MIGRATIONS_DIR` | Yes | Path to migration files | `/app/migrations` |
-| `PORTOPENER_ADMIN_TOKEN` | Yes | Admin API authentication token | `random-32-char-string` |
+| `PORTOPENER_ADMIN_TOKEN` | No | Optional admin API token (leave blank or set equal to relay token) | `random-32-char-string` |
 | `PORTOPENER_ADMIN_ALLOWLIST` | Yes | Comma-separated CIDR blocks for admin access | `1.2.3.4/32,5.6.7.8/32` |
-| `PORTOPENER_RELAY_TOKEN` | Yes | Token used by CLI clients | `random-32-char-string` |
+| `PORTOPENER_RELAY_TOKEN` | Yes | Token used by CLI clients and admin API | `random-32-char-string` |
 | `CLOUDFLARE_API_TOKEN` | Yes | Cloudflare API token for DNS-01 | `cloudflare-token` |
 | `ACME_EMAIL` | Yes | Email for Let's Encrypt notifications | `you@example.com` |
 | `BASE_DOMAIN` | Yes | Base domain (without tunnel subdomain) | `example.com` |
 
 ### Generating Secure Tokens
 
-Use `openssl` to generate cryptographically secure tokens:
+Use `openssl` to generate a cryptographically secure token (single token for both relay + admin API):
 
 ```bash
-# Generate admin token
-openssl rand -base64 32
-
-# Generate relay token
 openssl rand -base64 32
 ```
 
@@ -521,14 +518,14 @@ sudo docker compose up -d
 
 Token rotation invalidates the old token and issues a new one. Use this if you suspect token compromise or as a periodic security measure.
 
-### Rotate Admin Token
+### Rotate Token
 
-**Warning**: After rotating the admin token, you must update your `.env` file and restart the server.
+**Warning**: After rotating the token, update `PORTOPENER_RELAY_TOKEN` in `.env` and restart the server.
 
 ```bash
 # Rotate token via API
 curl -X POST \
-  -H "Authorization: Bearer your-current-admin-token" \
+  -H "Authorization: Bearer your-current-token" \
   https://admin.tunnel.example.com/api/token/rotate
 
 # Response:
@@ -538,16 +535,16 @@ curl -X POST \
 **Steps to complete rotation**:
 
 1. Copy the new token from the response
-2. Update `PORTOPENER_ADMIN_TOKEN` in your `.env` file
+2. Update `PORTOPENER_RELAY_TOKEN` in your `.env` file
 3. Restart the server:
    ```bash
    sudo docker compose restart server
    ```
 4. Verify access with the new token
 
-### Rotate Relay Token
+### Update CLI Clients
 
-The relay token is used by CLI clients to authenticate with the server. After rotation:
+The relay token is used by CLI clients to authenticate with the server and the admin API. After rotation:
 
 1. Rotate the token via admin API (same as above)
 2. Update `PORTOPENER_RELAY_TOKEN` in your `.env` file
@@ -620,7 +617,7 @@ sudo docker compose ps
 curl http://localhost:8080/healthz
 
 # Test admin API
-curl -H "Authorization: Bearer your-admin-token" https://admin.tunnel.example.com/api/tunnels
+curl -H "Authorization: Bearer your-token" https://admin.tunnel.example.com/api/tunnels
 
 # Test tunnel (from CLI client)
 portopener http 8080 --domain test
@@ -672,7 +669,7 @@ PortOpener retains access logs for **14 days**. Logs are stored in the `logs` ta
 
 ```bash
 # Via API
-curl -H "Authorization: Bearer your-admin-token" \
+curl -H "Authorization: Bearer your-token" \
   "https://admin.tunnel.example.com/api/logs?limit=100"
 
 # Via SQLite
@@ -698,7 +695,7 @@ PortOpener retains metrics rollups for **60 days**. Metrics are aggregated by mi
 
 ```bash
 # Via API
-curl -H "Authorization: Bearer your-admin-token" \
+curl -H "Authorization: Bearer your-token" \
   "https://admin.tunnel.example.com/api/metrics?limit=100"
 
 # Via SQLite
@@ -746,11 +743,11 @@ sudo docker exec -it portopener-server-1 ls -lh /data/portopener.db
 
 ```bash
 # List active tunnels
-curl -H "Authorization: Bearer your-admin-token" \
+curl -H "Authorization: Bearer your-token" \
   https://admin.tunnel.example.com/api/tunnels
 
 # List port reservations
-curl -H "Authorization: Bearer your-admin-token" \
+curl -H "Authorization: Bearer your-token" \
   https://admin.tunnel.example.com/api/reservations/ports
 ```
 
@@ -780,12 +777,12 @@ Consider setting up alerts for:
 
 ```bash
 # Check if domain exists
-curl -H "Authorization: Bearer your-admin-token" \
+curl -H "Authorization: Bearer your-token" \
   https://admin.tunnel.example.com/api/domains
 
 # Add domain via API
 curl -X POST \
-  -H "Authorization: Bearer your-admin-token" \
+  -H "Authorization: Bearer your-token" \
   -H "Content-Type: application/json" \
   -d '{"domain":"myapp.example.com","tunnel_id":"tunnel-id","status":"enabled"}' \
   https://admin.tunnel.example.com/api/domains
@@ -870,7 +867,7 @@ curl https://ifconfig.me
 echo $PORTOPENER_ADMIN_ALLOWLIST
 
 # Test token
-curl -H "Authorization: Bearer your-admin-token" \
+curl -H "Authorization: Bearer your-token" \
   http://localhost:8080/api/tunnels
 ```
 

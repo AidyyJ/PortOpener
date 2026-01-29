@@ -3,6 +3,7 @@ package admin
 import (
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,8 +13,9 @@ import (
 )
 
 type API struct {
-	Store *storage.Store
-	Reg   *tunnels.Registry
+	Store          *storage.Store
+	Reg            *tunnels.Registry
+	AdminAllowlist string
 }
 
 func (a *API) Handler() http.Handler {
@@ -32,6 +34,10 @@ func (a *API) Handler() http.Handler {
 
 func (a *API) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !a.allowAdminIP(r) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 		if a.Store == nil {
 			http.Error(w, "store not configured", http.StatusServiceUnavailable)
 			return
@@ -52,6 +58,31 @@ func (a *API) withAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+func (a *API) allowAdminIP(r *http.Request) bool {
+	parsed, err := tunnels.ParseAllowlistCSV(a.AdminAllowlist)
+	if err != nil {
+		return false
+	}
+	if parsed.Any {
+		return true
+	}
+	if r.RemoteAddr == "" {
+		return false
+	}
+	remote := r.RemoteAddr
+	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); forwarded != "" {
+		parts := strings.Split(forwarded, ",")
+		remote = strings.TrimSpace(parts[0])
+	}
+	if host, _, err := net.SplitHostPort(remote); err == nil {
+		remote = host
+	}
+	if parsed.Allowlist == nil {
+		return false
+	}
+	return parsed.Allowlist.Allows(remote)
 }
 
 func (a *API) handleListHTTPReservations(w http.ResponseWriter, _ *http.Request) {

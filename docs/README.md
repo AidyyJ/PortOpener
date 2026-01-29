@@ -32,6 +32,7 @@ Primary reference: [`docs/chat.md`](chat.md)
 ### Deployment Artifacts
 
 - [`../deploy/Caddyfile`](../deploy/Caddyfile) — Caddy reverse proxy configuration
+- [`../deploy/caddy.Dockerfile`](../deploy/caddy.Dockerfile) — Custom Caddy build with Cloudflare DNS-01
 - [`../deploy/docker-compose.yml`](../deploy/docker-compose.yml) — Docker Compose service definitions
 
 ---
@@ -92,15 +93,31 @@ Use the `on_demand` block to gate issuance through the server:
 ```
 {
   admin off
-}
-
-tls {
-  on_demand {
+  email {env.ACME_EMAIL}
+  on_demand_tls {
     ask http://server:8080/api/tls/ask
   }
 }
 
+admin.tunnel.{env.BASE_DOMAIN} {
+  tls {
+    dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+  }
+  reverse_proxy server:8080
+}
+
+*.tunnel.{env.BASE_DOMAIN} {
+  tls {
+    dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+  }
+  reverse_proxy server:8080
+}
+
 https:// {
+  tls {
+    dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+    on_demand
+  }
   reverse_proxy server:8080
 }
 ```
