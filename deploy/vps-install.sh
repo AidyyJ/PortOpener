@@ -2,7 +2,7 @@
 # Run this script after SSH'ing into your Ubuntu/Debian VPS.
 # Example:
 #   ssh user@your-vps
-#   curl -fsSL https://raw.githubusercontent.com/yourorg/PortOpener/main/deploy/vps-install.sh -o vps-install.sh
+#   curl -fsSL <REPLACE_WITH_YOUR_REPO_RAW_URL>/deploy/vps-install.sh -o vps-install.sh
 #   bash vps-install.sh
 set -euo pipefail
 
@@ -201,6 +201,16 @@ if wait_for_health "http://localhost:8080/healthz" 30 2; then
 else
   echo "Health check failed. Check logs with: sudo docker compose -f ${DEPLOY_DIR}/docker-compose.yml logs"
   exit 1
+fi
+
+log "Configuring automated backups"
+$SUDO mkdir -p /backups
+cron_entry='0 2 * * * cd /opt/portopener/deploy && /usr/bin/docker run --rm -v portopener_portopener_data:/data -v /backups:/backup alpine tar czf /backup/portopener-db-backup-$(date +\%Y\%m\%d).tar.gz /data/portopener.db'
+if $SUDO crontab -l 2>/dev/null | grep -Fq "$cron_entry"; then
+  echo "Backup cron job already exists."
+else
+  ( $SUDO crontab -l 2>/dev/null; echo "$cron_entry" ) | $SUDO crontab -
+  echo "Backup cron job installed."
 fi
 
 log "Deployment complete"
