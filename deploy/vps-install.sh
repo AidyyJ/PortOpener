@@ -2,7 +2,7 @@
 # Run this script after SSH'ing into your Ubuntu/Debian VPS.
 # Example:
 #   ssh user@your-vps
-#   curl -fsSL <REPLACE_WITH_YOUR_REPO_RAW_URL>/deploy/vps-install.sh -o vps-install.sh
+#   curl -fsSL https://raw.githubusercontent.com/AidyyJ/PortOpener/main/deploy/vps-install.sh -o vps-install.sh
 #   bash vps-install.sh
 set -euo pipefail
 
